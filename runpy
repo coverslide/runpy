@@ -53,6 +53,9 @@ def create_virtualenv(venv_dir: str) -> None:
         except subprocess.CalledProcessError as e:
             print(f"Error: Failed to create virtual environment: {e}", file=sys.stderr)
             sys.exit(1)
+        except KeyboardInterrupt:
+            verbose_print("KeyboardInterrupt received during venv creation")
+            sys.exit(130)
         
         # install deps if requirements.txt exists
         if os.path.exists("requirements.txt"):
@@ -64,6 +67,9 @@ def create_virtualenv(venv_dir: str) -> None:
             except subprocess.CalledProcessError as e:
                 print(f"Error: Failed to install requirements: {e}", file=sys.stderr)
                 sys.exit(1)
+            except KeyboardInterrupt:
+                verbose_print("KeyboardInterrupt received during dependency installation")
+                sys.exit(130)
         else:
             print("Warning: requirements.txt not found, skipping dependency installation", file=sys.stderr)
     else:
@@ -88,13 +94,13 @@ def run_script(venv_dir: str, script_name: str, extra_args: List[str]) -> int:
     verbose_print(f"Executing command: {' '.join(command)}")
     
     try:
-        result = subprocess.run(command, stdin=sys.stdin)
+        result = subprocess.run(command)
         if result.returncode != 0 and not VERBOSE:
             print(f"Script exited with code {result.returncode}. Use --verbose for details.", file=sys.stderr)
         verbose_print(f"Script completed with exit code: {result.returncode}")
         return result.returncode
     except KeyboardInterrupt:
-        verbose_print("KeyboardInterrupt received, passing through to child process")
+        verbose_print("KeyboardInterrupt received, returning 130")
         return 130
 
 def main() -> None:
@@ -158,6 +164,9 @@ def main() -> None:
             except subprocess.CalledProcessError as e:
                 print(f"Error: Failed to upgrade requirements: {e}", file=sys.stderr)
                 sys.exit(1)
+            except KeyboardInterrupt:
+                verbose_print("KeyboardInterrupt received during dependency upgrade")
+                sys.exit(130)
         else:
             print("Warning: requirements.txt not found, skipping dependency upgrade", file=sys.stderr)
 
@@ -169,5 +178,8 @@ def main() -> None:
     sys.exit(exit_code)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.exit(130)
 
