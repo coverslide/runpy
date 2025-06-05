@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+import os
+import subprocess
+import sys
+import shutil
+import hashlib
+import argparse
+import platform
+from typing import List, Optional
+
+# paths
+HOME_DIR = os.path.expanduser("~")
+EXECUTABLE_PATH = os.path.abspath(sys.argv[0])
+
+# globals
+VERBOSE = False
+VENV_DIR: Optional[str] = None
+
+def verbose_print(*args, **kwargs) -> None:
+    if VERBOSE:
+        print(*args, **kwargs)
+
+def get_hashed_dir() -> str:
+    venv_root = os.path.join(HOME_DIR, ".venv")
+
+    if not os.path.exists(venv_root):
+        verbose_print(f"Creating venv root directory: {venv_root}")
+        os.makedirs(venv_root)
+
+    hash_obj = hashlib.sha256(EXECUTABLE_PATH.encode())
+    venv_dir = os.path.join(venv_root, hash_obj.hexdigest())
+    verbose_print(f"Using virtual environment: {venv_dir}")
+    return venv_dir
+
+def get_pip_executable(venv_dir: str) -> str:
+    if platform.system() == "Windows":
+        return os.path.join(venv_dir, "Scripts", "pip.exe")
+    else:
+        return os.path.join(venv_dir, "bin", "pip")
+
+def get_python_executable(venv_dir: str) -> str:
+    if platform.system() == "Windows":
+        return os.path.join(venv_dir, "Scripts", "python.exe")
+    else:
+        return os.path.join(venv_dir, "bin", "python")
+
+def create_virtualenv(venv_dir: str) -> None:
+    if not os.path.exists(venv_dir):
+        verbose_print(f"Creating virtual environment at: {venv_dir}")
+        try:
+            subprocess.run([sys.executable, "-m", "venv", venv_dir], check=True)
+            verbose_print("Virtual environment created successfully")
+        except subprocess.CalledProcessError as e:
+            print(f"Error: Failed to create virtual environment: {e}", file=sys.stderr)
+            sys.exit(1)
+        
+        # install deps if requirements.txt exists
+        if os.path.exists("requirements.txt"):
+            verbose_print("Installing dependencies from requirements.txt")
+            pip_exe = get_pip_executable(venv_dir)
+            try:
+                subprocess.run([pip_exe, "install", "-r", "requirements.txt"], check=True)
+                verbose_print("Dependencies installed successfully")
+            except subprocess.CalledProcessError as e:
+                print(f"Error: Failed to install requirements: {e}", file=sys.stderr)
+                sys.exit(1)
+        else:
+            print("Warning: requirements.txt not found, skipping dependency installation", file=sys.stderr)
+    else:
+        verbose_print(f"Using existing virtual environment: {venv_dir}")
+
+def cleanup(venv_dir: str) -> None:
+    print(f"Removing virtual environment: {venv_dir}")
+    verbose_print(f"Deleting directory: {venv_dir}")
+    shutil.rmtree(venv_dir, ignore_errors=True)
+    verbose_print("Cleanup completed")
+
+def run_script(venv_dir: str, script_name: str, extra_args: List[str]) -> None:
+    # check script exists
+    if not os.path.exists(script_name):
+        print(f"Error: Script '{script_name}' not found", file=sys.stderr)
+        sys.exit(1)
+    
+    python_exe = get_python_executable(venv_dir)
+    verbose_print(f"Using Python executable: {python_exe}")
+
+    # strip leading -- if present
+    if extra_args and extra_args[0] == "--":
+        extra_args = extra_args[1:]
+
+    command = [python_exe, script_name] + extra_args
+    verbose_print(f"Executing command: {' '.join(command)}")
+    
+    try:
+        subprocess.run(command, check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Error: Script execution failed: {e}", file=sys.stderr)
+        sys.exit(1)
+
+def main() -> None:
+    global VERBOSE, VENV_DIR
+    parser = argparse.ArgumentParser(description="Manage virtual environments per executable.")
+    parser.add_argument("script", nargs='?', help="The script to execute inside the virtual environment.")
+    parser.add_argument("-c", "--clean", action="store_true", help="Remove the virtual environment.")
+    parser.add_argument("-r", "--reset", action="store_true", help="Reinstall dependencies without deleting the venv.")
+    parser.add_argument("-o", "--run-once", dest="run_once", action="store_true", help="Run the script and clean up afterward.")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output for debugging.")
+
+    # grab args after --
+    args, extra_args = parser.parse_known_args()
+    
+    # set verbose first
+    VERBOSE = args.verbose
+    
+    # now setup venv dir
+    VENV_DIR = get_hashed_dir()
+    
+    verbose_print("Verbose mode enabled")
+    verbose_print(f"Executable path: {EXECUTABLE_PATH}")
+    verbose_print(f"Working directory: {os.getcwd()}")
+
+    # cleanup mode
+    if args.clean:
+        cleanup(VENV_DIR)
+        return
+
+    # need script unless just cleaning
+    if not args.script:
+        parser.error("script argument is required unless using --clean")
+
+    create_virtualenv(VENV_DIR)
+
+    # reset deps
+    if args.reset:
+        if os.path.exists("requirements.txt"):
+            verbose_print("Upgrading dependencies from requirements.txt")
+            pip_exe = get_pip_executable(VENV_DIR)
+            try:
+                subprocess.run([pip_exe, "install", "--upgrade", "-r", "requirements.txt"], check=True)
+                verbose_print("Dependencies upgraded successfully")
+            except subprocess.CalledProcessError as e:
+                print(f"Error: Failed to upgrade requirements: {e}", file=sys.stderr)
+                sys.exit(1)
+        else:
+            print("Warning: requirements.txt not found, skipping dependency upgrade", file=sys.stderr)
+
+    run_script(VENV_DIR, args.script, extra_args)
+
+    if args.run_once:
+        cleanup(VENV_DIR)
+
+if __name__ == "__main__":
+    main()
+
