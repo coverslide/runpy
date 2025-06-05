@@ -84,10 +84,6 @@ def run_script(venv_dir: str, script_name: str, extra_args: List[str]) -> None:
     python_exe = get_python_executable(venv_dir)
     verbose_print(f"Using Python executable: {python_exe}")
 
-    # strip leading -- if present
-    if extra_args and extra_args[0] == "--":
-        extra_args = extra_args[1:]
-
     command = [python_exe, script_name] + extra_args
     verbose_print(f"Executing command: {' '.join(command)}")
     
@@ -99,15 +95,32 @@ def run_script(venv_dir: str, script_name: str, extra_args: List[str]) -> None:
 
 def main() -> None:
     global VERBOSE, VENV_DIR
+    
+    # find the first non-flag argument as the script
+    script_index = None
+    for i, arg in enumerate(sys.argv[1:], 1):
+        if not arg.startswith('-'):
+            script_index = i
+            break
+    
+    if script_index is not None:
+        # parse only runpy arguments before the script
+        runpy_args = sys.argv[1:script_index]
+        script_name = sys.argv[script_index]
+        script_args = sys.argv[script_index + 1:]
+    else:
+        # no script found, parse all arguments as runpy arguments
+        runpy_args = sys.argv[1:]
+        script_name = None
+        script_args = []
+    
     parser = argparse.ArgumentParser(description="Manage virtual environments per executable.")
-    parser.add_argument("script", nargs='?', help="The script to execute inside the virtual environment.")
     parser.add_argument("-c", "--clean", action="store_true", help="Remove the virtual environment.")
     parser.add_argument("-r", "--reset", action="store_true", help="Reinstall dependencies without deleting the venv.")
     parser.add_argument("-o", "--run-once", dest="run_once", action="store_true", help="Run the script and clean up afterward.")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output for debugging.")
 
-    # grab args after --
-    args, extra_args = parser.parse_known_args()
+    args = parser.parse_args(runpy_args)
     
     # set verbose first
     VERBOSE = args.verbose
@@ -125,7 +138,7 @@ def main() -> None:
         return
 
     # need script unless just cleaning
-    if not args.script:
+    if not script_name:
         parser.error("script argument is required unless using --clean")
 
     create_virtualenv(VENV_DIR)
@@ -144,7 +157,7 @@ def main() -> None:
         else:
             print("Warning: requirements.txt not found, skipping dependency upgrade", file=sys.stderr)
 
-    run_script(VENV_DIR, args.script, extra_args)
+    run_script(VENV_DIR, script_name, script_args)
 
     if args.run_once:
         cleanup(VENV_DIR)
