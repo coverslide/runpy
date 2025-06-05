@@ -75,7 +75,7 @@ def cleanup(venv_dir: str) -> None:
     shutil.rmtree(venv_dir, ignore_errors=True)
     verbose_print("Cleanup completed")
 
-def run_script(venv_dir: str, script_name: str, extra_args: List[str]) -> None:
+def run_script(venv_dir: str, script_name: str, extra_args: List[str]) -> int:
     # check script exists
     if not os.path.exists(script_name):
         print(f"Error: Script '{script_name}' not found", file=sys.stderr)
@@ -88,10 +88,14 @@ def run_script(venv_dir: str, script_name: str, extra_args: List[str]) -> None:
     verbose_print(f"Executing command: {' '.join(command)}")
     
     try:
-        subprocess.run(command, check=True)
-    except subprocess.CalledProcessError as e:
-        print(f"Error: Script execution failed: {e}", file=sys.stderr)
-        sys.exit(1)
+        result = subprocess.run(command, stdin=sys.stdin)
+        if result.returncode != 0 and not VERBOSE:
+            print(f"Script exited with code {result.returncode}. Use --verbose for details.", file=sys.stderr)
+        verbose_print(f"Script completed with exit code: {result.returncode}")
+        return result.returncode
+    except KeyboardInterrupt:
+        verbose_print("KeyboardInterrupt received, passing through to child process")
+        return 130
 
 def main() -> None:
     global VERBOSE, VENV_DIR
@@ -157,10 +161,12 @@ def main() -> None:
         else:
             print("Warning: requirements.txt not found, skipping dependency upgrade", file=sys.stderr)
 
-    run_script(VENV_DIR, script_name, script_args)
+    exit_code = run_script(VENV_DIR, script_name, script_args)
 
     if args.run_once:
         cleanup(VENV_DIR)
+    
+    sys.exit(exit_code)
 
 if __name__ == "__main__":
     main()
