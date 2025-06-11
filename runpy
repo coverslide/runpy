@@ -20,31 +20,30 @@ def verbose_print(*args, **kwargs) -> None:
     if VERBOSE:
         print(*args, **kwargs)
 
-def get_hashed_dir() -> str:
+def get_hashed_dir(identifier: Optional[str] = None) -> str:
     venv_root = os.path.join(HOME_DIR, ".venv")
 
     if not os.path.exists(venv_root):
         verbose_print(f"Creating venv root directory: {venv_root}")
         os.makedirs(venv_root)
 
-    hash_obj = hashlib.sha256(EXECUTABLE_PATH.encode())
-    venv_dir = os.path.join(venv_root, hash_obj.hexdigest())
+    # Use custom identifier or default to executable path
+    hash_input = identifier if identifier else EXECUTABLE_PATH
+    verbose_print(f"Hash input: {hash_input}")
+    hash_obj = hashlib.sha256(hash_input.encode())
+    hash_digest = hash_obj.hexdigest()
+    verbose_print(f"Hash digest: {hash_digest}")
+    venv_dir = os.path.join(venv_root, hash_digest)
     verbose_print(f"Using virtual environment: {venv_dir}")
     return venv_dir
 
-def get_pip_executable(venv_dir: str) -> str:
+def get_venv_executable(venv_dir: str, name: str) -> str:
     if platform.system() == "Windows":
-        return os.path.join(venv_dir, "Scripts", "pip.exe")
+        return os.path.join(venv_dir, "Scripts", f"{name}.exe")
     else:
-        return os.path.join(venv_dir, "bin", "pip")
+        return os.path.join(venv_dir, "bin", name)
 
-def get_python_executable(venv_dir: str) -> str:
-    if platform.system() == "Windows":
-        return os.path.join(venv_dir, "Scripts", "python.exe")
-    else:
-        return os.path.join(venv_dir, "bin", "python")
-
-def create_virtualenv(venv_dir: str) -> None:
+def create_virtualenv(venv_dir: str, pip_mode: bool = False, deps_file: Optional[str] = None) -> None:
     if not os.path.exists(venv_dir):
         verbose_print(f"Creating virtual environment at: {venv_dir}")
         try:
@@ -57,21 +56,29 @@ def create_virtualenv(venv_dir: str) -> None:
             verbose_print("KeyboardInterrupt received during venv creation")
             sys.exit(130)
         
-        # install deps if requirements.txt exists
-        if os.path.exists("requirements.txt"):
-            verbose_print("Installing dependencies from requirements.txt")
-            pip_exe = get_pip_executable(venv_dir)
-            try:
-                subprocess.run([pip_exe, "install", "-r", "requirements.txt"], check=True)
-                verbose_print("Dependencies installed successfully")
-            except subprocess.CalledProcessError as e:
-                print(f"Error: Failed to install requirements: {e}", file=sys.stderr)
-                sys.exit(1)
-            except KeyboardInterrupt:
-                verbose_print("KeyboardInterrupt received during dependency installation")
-                sys.exit(130)
-        else:
-            print("Warning: requirements.txt not found, skipping dependency installation", file=sys.stderr)
+        # only install requirements in script mode, not pip mode
+        if not pip_mode:
+            # use custom deps file or default to requirements.txt
+            requirements_file = deps_file if deps_file else "requirements.txt"
+            
+            if os.path.exists(requirements_file):
+                verbose_print(f"Installing dependencies from {requirements_file}")
+                pip_exe = get_venv_executable(venv_dir, "pip")
+                try:
+                    subprocess.run([pip_exe, "install", "-r", requirements_file], check=True)
+                    verbose_print("Dependencies installed successfully")
+                except subprocess.CalledProcessError as e:
+                    print(f"Error: Failed to install requirements: {e}", file=sys.stderr)
+                    sys.exit(1)
+                except KeyboardInterrupt:
+                    verbose_print("KeyboardInterrupt received during dependency installation")
+                    sys.exit(130)
+            else:
+                if deps_file:
+                    print(f"Error: Specified requirements file '{requirements_file}' not found", file=sys.stderr)
+                    sys.exit(1)
+                else:
+                    print("Warning: requirements.txt not found, skipping dependency installation", file=sys.stderr)
     else:
         verbose_print(f"Using existing virtual environment: {venv_dir}")
 
@@ -81,13 +88,66 @@ def cleanup(venv_dir: str) -> None:
     shutil.rmtree(venv_dir, ignore_errors=True)
     verbose_print("Cleanup completed")
 
+def get_pip_package_id(package_name: str) -> str:
+    return f"pip::{package_name}"
+
+def install_pip_package(venv_dir: str, package_name: str) -> None:
+    verbose_print(f"Installing pip package: {package_name}")
+    pip_exe = get_venv_executable(venv_dir, "pip")
+    try:
+        subprocess.run([pip_exe, "install", package_name], check=True)
+        verbose_print(f"Package {package_name} installed successfully")
+    except subprocess.CalledProcessError as e:
+        print(f"Error: Failed to install package {package_name}: {e}", file=sys.stderr)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        verbose_print("KeyboardInterrupt received during package installation")
+        sys.exit(130)
+
+def find_executable_in_venv(venv_dir: str, executable_name: str) -> Optional[str]:
+    if platform.system() == "Windows":
+        scripts_dir = os.path.join(venv_dir, "Scripts")
+        # Try with .exe extension first, then without
+        for name in [f"{executable_name}.exe", executable_name]:
+            exe_path = os.path.join(scripts_dir, name)
+            if os.path.exists(exe_path):
+                return exe_path
+    else:
+        bin_dir = os.path.join(venv_dir, "bin")
+        exe_path = os.path.join(bin_dir, executable_name)
+        if os.path.exists(exe_path):
+            return exe_path
+    return None
+
+def run_pip_executable(venv_dir: str, executable_name: str, extra_args: List[str]) -> int:
+    verbose_print(f"Looking for executable: {executable_name}")
+    exe_path = find_executable_in_venv(venv_dir, executable_name)
+    
+    if not exe_path:
+        print(f"Error: Executable '{executable_name}' not found in virtual environment", file=sys.stderr)
+        sys.exit(1)
+    
+    verbose_print(f"Using executable: {exe_path}")
+    command = [exe_path] + extra_args
+    verbose_print(f"Executing command: {' '.join(command)}")
+    
+    try:
+        result = subprocess.run(command)
+        if result.returncode != 0 and not VERBOSE:
+            print(f"Command exited with code {result.returncode}. Use --verbose for details.", file=sys.stderr)
+        verbose_print(f"Command completed with exit code: {result.returncode}")
+        return result.returncode
+    except KeyboardInterrupt:
+        verbose_print("KeyboardInterrupt received, returning 130")
+        return 130
+
 def run_script(venv_dir: str, script_name: str, extra_args: List[str]) -> int:
     # check script exists
     if not os.path.exists(script_name):
         print(f"Error: Script '{script_name}' not found", file=sys.stderr)
         sys.exit(1)
     
-    python_exe = get_python_executable(venv_dir)
+    python_exe = get_venv_executable(venv_dir, "python")
     verbose_print(f"Using Python executable: {python_exe}")
 
     command = [python_exe, script_name] + extra_args
@@ -106,60 +166,87 @@ def run_script(venv_dir: str, script_name: str, extra_args: List[str]) -> int:
 def main() -> None:
     global VERBOSE, VENV_DIR
     
-    # find the first non-flag argument as the script
-    script_index = None
-    for i, arg in enumerate(sys.argv[1:], 1):
-        if not arg.startswith('-'):
-            script_index = i
-            break
-    
-    if script_index is not None:
-        # parse only runpy arguments before the script
-        runpy_args = sys.argv[1:script_index]
-        script_name = sys.argv[script_index]
-        script_args = sys.argv[script_index + 1:]
-    else:
-        # no script found, parse all arguments as runpy arguments
-        runpy_args = sys.argv[1:]
-        script_name = None
-        script_args = []
-    
+    # use parse_known_args to handle arguments properly
     parser = argparse.ArgumentParser(description="Manage virtual environments per executable.")
     parser.add_argument("-c", "--clean", action="store_true", help="Remove the virtual environment.")
     parser.add_argument("-r", "--reset", action="store_true", help="Reinstall dependencies without deleting the venv.")
     parser.add_argument("-o", "--run-once", dest="run_once", action="store_true", help="Run the script and clean up afterward.")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output for debugging.")
-
-    args = parser.parse_args(runpy_args)
+    parser.add_argument("-p", "--pip", action="store_true", help="Install and run a pip package instead of a script.")
+    parser.add_argument("-m", "--module", help="Specify module name to install (only with --pip).")
+    parser.add_argument("-d", "--deps", help="Specify path to requirements file (only in script mode).")
+    
+    args, remaining_args = parser.parse_known_args(sys.argv[1:])
+    
+    # if there are remaining args, the first one is the script/package name
+    if remaining_args:
+        script_name = remaining_args[0]
+        script_args = remaining_args[1:]
+    else:
+        script_name = None
+        script_args = []
     
     # set verbose first
     VERBOSE = args.verbose
     
-    # now setup venv dir
-    VENV_DIR = get_hashed_dir()
+    # validate argument combinations
+    if args.pip:
+        if args.deps:
+            parser.error("--deps cannot be used with --pip mode")
+        if not script_name:
+            parser.error("executable name is required when using --pip")
+        # module to install is either specified with -m or defaults to executable name
+        module_name = args.module if args.module else script_name
+        pip_id = get_pip_package_id(module_name)
+        VENV_DIR = get_hashed_dir(pip_id)
+    else:
+        if args.module:
+            parser.error("--module can only be used with --pip")
+        VENV_DIR = get_hashed_dir()
+        module_name = None
     
-    verbose_print("Verbose mode enabled")
-    verbose_print(f"Executable path: {EXECUTABLE_PATH}")
     verbose_print(f"Working directory: {os.getcwd()}")
+    verbose_print(f"Virtual environment: {VENV_DIR}")
 
     # cleanup mode
     if args.clean:
         cleanup(VENV_DIR)
         return
 
-    # need script unless just cleaning
-    if not script_name:
-        parser.error("script argument is required unless using --clean")
+    # handle pip mode
+    if args.pip:
+        executable_name = script_name
+        verbose_print(f"Module to install: {module_name}")
+        verbose_print(f"Executable to run: {executable_name}")
+        
+        venv_existed = os.path.exists(VENV_DIR)
+        create_virtualenv(VENV_DIR, pip_mode=True)
+        
+        # install package if venv is new or reset is requested
+        if not venv_existed or args.reset:
+            install_pip_package(VENV_DIR, module_name)
+        
+        exit_code = run_pip_executable(VENV_DIR, executable_name, script_args)
+        
+        if args.run_once:
+            cleanup(VENV_DIR)
+        
+        sys.exit(exit_code)
 
-    create_virtualenv(VENV_DIR)
+    # need script unless just cleaning or in pip mode
+    if not script_name:
+        parser.error("script argument is required unless using --clean or --pip")
+
+    create_virtualenv(VENV_DIR, deps_file=args.deps)
 
     # reset deps
     if args.reset:
-        if os.path.exists("requirements.txt"):
-            verbose_print("Upgrading dependencies from requirements.txt")
-            pip_exe = get_pip_executable(VENV_DIR)
+        requirements_file = args.deps if args.deps else "requirements.txt"
+        if os.path.exists(requirements_file):
+            verbose_print(f"Upgrading dependencies from {requirements_file}")
+            pip_exe = get_venv_executable(VENV_DIR, "pip")
             try:
-                subprocess.run([pip_exe, "install", "--upgrade", "-r", "requirements.txt"], check=True)
+                subprocess.run([pip_exe, "install", "--upgrade", "-r", requirements_file], check=True)
                 verbose_print("Dependencies upgraded successfully")
             except subprocess.CalledProcessError as e:
                 print(f"Error: Failed to upgrade requirements: {e}", file=sys.stderr)
@@ -168,7 +255,11 @@ def main() -> None:
                 verbose_print("KeyboardInterrupt received during dependency upgrade")
                 sys.exit(130)
         else:
-            print("Warning: requirements.txt not found, skipping dependency upgrade", file=sys.stderr)
+            if args.deps:
+                print(f"Error: Specified requirements file '{requirements_file}' not found", file=sys.stderr)
+                sys.exit(1)
+            else:
+                print("Warning: requirements.txt not found, skipping dependency upgrade", file=sys.stderr)
 
     exit_code = run_script(VENV_DIR, script_name, script_args)
 
